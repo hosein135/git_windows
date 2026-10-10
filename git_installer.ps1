@@ -25,6 +25,42 @@ function Refresh-ProcessPath {
                 [System.Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
+function Ensure-MachinePathEntry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath
+    )
+
+    if (!(Test-Path $TargetPath)) { return }
+
+    $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $parts = $machinePath -split ';' | Where-Object { $_ -ne '' }
+    if ($parts -contains $TargetPath) { return }
+
+    $newPath = ($parts + $TargetPath) -join ';'
+    [System.Environment]::SetEnvironmentVariable('Path', $newPath, 'Machine')
+    Write-Host "Added to system PATH: $TargetPath" -ForegroundColor DarkCyan
+}
+
+function Set-GitIdentity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$UserName,
+        [Parameter(Mandatory = $true)]
+        [string]$UserEmail
+    )
+
+    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $gitCmd) {
+        Write-Warning 'Git was not found on PATH; skipping user.name / user.email configuration.'
+        return
+    }
+
+    & git config --global user.name $UserName
+    & git config --global user.email $UserEmail
+    Write-Host "Configured git identity: $UserName <$UserEmail>" -ForegroundColor Green
+}
+
 function Test-WingetUsable {
     $cmd = Get-Command winget -ErrorAction SilentlyContinue
     if (-not $cmd) { return $false }
@@ -208,6 +244,10 @@ function Install-ViaWinget {
 $gitVersion    = '2.45.0'
 $tortoiseVer   = '2.16.0.0'
 
+## Git identity (edit these before running)
+$gitUserName  = 'Their Name'
+$gitUserEmail = 'their@email.com'
+
 ## 1. Prefer WinGet when it actually works; otherwise use direct downloads
 $useWinget = Install-WingetIfPossible
 Refresh-ProcessPath
@@ -218,13 +258,16 @@ if ($useWinget) {
     Install-ViaDirectDownload -GitVersion $gitVersion -TortoiseVer $tortoiseVer
 }
 
-## 2. Update session PATH for verification
-Refresh-ProcessPath
+## 2. Ensure Git/TortoiseGit are on system PATH and this session
 $commonPaths = @(
     'C:\Program Files\Git\cmd',
     'C:\Program Files\Git\bin',
     'C:\Program Files\TortoiseGit\bin'
 )
+foreach ($targetPath in $commonPaths) {
+    Ensure-MachinePathEntry -TargetPath $targetPath
+}
+Refresh-ProcessPath
 foreach ($targetPath in $commonPaths) {
     if ((Test-Path $targetPath) -and ($env:Path -notlike "*$targetPath*")) {
         $env:Path += ";$targetPath"
@@ -232,10 +275,15 @@ foreach ($targetPath in $commonPaths) {
     }
 }
 
-## 3. Verification
+## 3. Configure global Git username / email
+Set-GitIdentity -UserName $gitUserName -UserEmail $gitUserEmail
+
+## 4. Verification
 Write-Host "`nVerifying installations in current session:" -ForegroundColor Cyan
 if (Get-Command git -ErrorAction SilentlyContinue) {
     Write-Host "-> Git version: $(git --version)" -ForegroundColor Green
+    Write-Host "-> Git user.name:  $(git config --global user.name)" -ForegroundColor Green
+    Write-Host "-> Git user.email: $(git config --global user.email)" -ForegroundColor Green
 } else {
     Write-Warning 'Git command could not be found directly. Try restarting your terminal.'
 }
